@@ -632,6 +632,16 @@
                         android:orientation="vertical">
 
                         <RadioButton
+                            android:id="@+id/rb_preset_lynk0708"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:minHeight="40dp"
+                            android:text="老款领克07/08-AdaptAPI触发"
+                            android:textColor="@color/text_primary"
+                            android:textSize="14sp"
+                            android:buttonTint="@color/colorPrimary" />
+
+                        <RadioButton
                             android:id="@+id/rb_preset_car_api"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"

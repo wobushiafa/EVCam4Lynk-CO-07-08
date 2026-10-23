@@ -83,6 +83,7 @@ public class SingleCamera {
     // 领克全景模式：摄像头输出 2x2 拼接画面，经 FisheyeCorrector GL 管线裁切分发到各方向小窗
     private volatile boolean panoramicMode = false;
     private volatile String panoramicMainDirection = null; // 主画面显示的方向，null 表示完整拼接画面
+    private volatile String panoramicFloatingDirection = null; // 悬浮窗/副屏显示的方向（补盲），null 表示完整拼接画面
     private final java.util.Map<String, TextureView> panoramicViews = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.Map<String, Surface> panoramicSurfaces = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.Map<String, SurfaceTexture> panoramicSurfaceSources = new java.util.concurrent.ConcurrentHashMap<>();
@@ -1379,7 +1380,8 @@ public class SingleCamera {
                     previewSurface = null;
                 }
                 AppConfig fisheyeConfig = new AppConfig(context);
-                if (fisheyeConfig.isFisheyeCorrectionEnabled()) {
+                boolean fisheyeEnabled = fisheyeConfig.isFisheyeCorrectionEnabled();
+                if (fisheyeEnabled || panoramicMode) {
                     try {
                         releaseFisheyeCorrector();
                         fisheyePrimaryIsFloating = true;
@@ -1387,8 +1389,14 @@ public class SingleCamera {
                         int ph = previewSize != null ? previewSize.getHeight() : 1080;
                         fisheyeCorrector = new FisheyeCorrector(cameraId, cameraPosition, pw, ph);
                         previewSurface = fisheyeCorrector.initialize(mainFloatingSurface, backgroundHandler);
-                        fisheyeCorrector.loadParams(fisheyeConfig);
-                        AppLog.d(TAG, "Camera " + cameraId + " fisheye corrector active (no textureView, using mainFloatingSurface)");
+                        if (fisheyeEnabled) {
+                            fisheyeCorrector.loadParams(fisheyeConfig);
+                        }
+                        if (panoramicMode) {
+                            applyPanoramicMainParams();
+                        }
+                        AppLog.d(TAG, "Camera " + cameraId + " fisheye corrector active (no textureView, using mainFloatingSurface)"
+                                + (panoramicMode ? " (panoramic)" : ""));
                     } catch (Exception e) {
                         AppLog.e(TAG, "Camera " + cameraId + " fisheye init failed (floating surface), falling back", e);
                         releaseFisheyeCorrector();
@@ -1493,13 +1501,13 @@ public class SingleCamera {
                     if (fisheyePrimaryIsFloating) {
                         fisheyeCorrector.removeOutputSurface("mainFloating");
                     } else if (mainFloatingSurface != null && mainFloatingSurface.isValid()) {
-                        fisheyeCorrector.addOutputSurface("mainFloating", mainFloatingSurface);
+                        addFloatingOutput("mainFloating", mainFloatingSurface);
                         AppLog.d(TAG, "Registered main floating surface to fisheye GL pipeline");
                     } else {
                         fisheyeCorrector.removeOutputSurface("mainFloating");
                     }
                     if (secondaryDisplaySurface != null && secondaryDisplaySurface.isValid()) {
-                        fisheyeCorrector.addOutputSurface("secondaryDisplay", secondaryDisplaySurface);
+                        addFloatingOutput("secondaryDisplay", secondaryDisplaySurface);
                         AppLog.d(TAG, "Registered secondary display surface to fisheye GL pipeline");
                     } else {
                         fisheyeCorrector.removeOutputSurface("secondaryDisplay");
@@ -1938,7 +1946,7 @@ public class SingleCamera {
             if (backgroundHandler != null) {
                 backgroundHandler.post(() -> {
                     if (fisheyeCorrector != null && fisheyeCorrector.isInitialized()) {
-                        fisheyeCorrector.addOutputSurface(tag, surface);
+                        addFloatingOutput(tag, surface);
                     }
                 });
             }
@@ -2566,7 +2574,8 @@ public class SingleCamera {
     private void applyPanoramicMainParams() {
         FisheyeCorrector corrector = fisheyeCorrector;
         if (corrector == null || !panoramicMode) return;
-        String direction = panoramicMainDirection;
+        // 无 TextureView 时主输出就是悬浮窗 Surface（补盲冷启动），按悬浮窗方向裁切
+        String direction = fisheyePrimaryIsFloating ? panoramicFloatingDirection : panoramicMainDirection;
         if (direction == null) {
             // 完整拼接画面不做畸变矫正（矫正中心应在各方向画面中心，而非拼接图中心）
             corrector.setMainOutputParams(null, -1, false);
@@ -2575,6 +2584,62 @@ public class SingleCamera {
             corrector.setMainOutputParams(AppConfig.getPanoramicCropRegion(direction),
                     config.getPanoramicRotation(direction), config.isFisheyeCorrectionEnabled());
         }
+    }
+
+    /**
+     * 设置悬浮窗/副屏显示的全景方向（补盲：left/right/back）。
+     * front 或 null 表示完整拼接画面（保持悬浮窗原有行为）。
+     * 非全景模式下忽略。已注册的输出下一帧即按新方向裁切。
+     */
+    public void setPanoramicFloatingDirection(String direction) {
+        if (!panoramicMode) return;
+        this.panoramicFloatingDirection = "front".equals(direction) ? null : direction;
+        if (backgroundHandler != null) {
+            backgroundHandler.post(() -> {
+                FisheyeCorrector corrector = fisheyeCorrector;
+                if (corrector == null || !corrector.isInitialized()) return;
+                if (fisheyePrimaryIsFloating) {
+                    applyPanoramicMainParams();
+                }
+                PanoramicParams p = panoramicFloatingParams();
+                corrector.setOutputParams("mainFloating", p.crop, p.rotation, p.distort);
+                corrector.setOutputParams("secondaryDisplay", p.crop, p.rotation, p.distort);
+            });
+        }
+    }
+
+    private static final class PanoramicParams {
+        final float[] crop;
+        final int rotation;
+        final boolean distort;
+
+        PanoramicParams(float[] crop, int rotation, boolean distort) {
+            this.crop = crop;
+            this.rotation = rotation;
+            this.distort = distort;
+        }
+    }
+
+    /**
+     * 悬浮窗/副屏输出参数：全景模式按 panoramicFloatingDirection 裁切，否则完整画面 + 全局矫正
+     */
+    private PanoramicParams panoramicFloatingParams() {
+        String direction = panoramicMode ? panoramicFloatingDirection : null;
+        if (direction == null) {
+            // 完整拼接画面不做畸变矫正；非全景模式沿用全局矫正
+            return new PanoramicParams(null, -1, !panoramicMode);
+        }
+        AppConfig config = new AppConfig(context);
+        return new PanoramicParams(AppConfig.getPanoramicCropRegion(direction),
+                config.getPanoramicRotation(direction), config.isFisheyeCorrectionEnabled());
+    }
+
+    /**
+     * 将悬浮窗/副屏 Surface 注册为 GL 管线附加输出（需在 backgroundHandler 线程调用）
+     */
+    private void addFloatingOutput(String tag, Surface surface) {
+        PanoramicParams p = panoramicFloatingParams();
+        fisheyeCorrector.addOutputSurface(tag, surface, p.crop, p.rotation, p.distort);
     }
 
     /**

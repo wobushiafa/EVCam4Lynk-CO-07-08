@@ -156,6 +156,8 @@ public class CodecVideoRecorder {
 
     // 时间水印设置
     private boolean watermarkEnabled = false;
+    private boolean watermarkShowTime = true;   // 角标显示时间
+    private boolean watermarkShowSpeed = false; // 角标显示车速
 
     // 注意：帧同步变量已移除，帧处理现在直接在 onFrameAvailable 回调中完成
 
@@ -186,6 +188,17 @@ public class CodecVideoRecorder {
             eglEncoder.setWatermarkEnabled(enabled);
         }
         AppLog.d(TAG, "Camera " + cameraId + " Watermark " + (enabled ? "enabled" : "disabled"));
+    }
+
+    /**
+     * 设置角标内容（时间/车速）
+     */
+    public void setWatermarkContent(boolean showTime, boolean showSpeed) {
+        this.watermarkShowTime = showTime;
+        this.watermarkShowSpeed = showSpeed;
+        if (eglEncoder != null) {
+            eglEncoder.setWatermarkContent(showTime, showSpeed);
+        }
     }
 
     /**
@@ -465,6 +478,7 @@ public class CodecVideoRecorder {
                     eglEncoder.setInputSurfaceTexture(inputSurfaceTexture);
 
                     // 设置时间水印（如果启用）
+                    eglEncoder.setWatermarkContent(watermarkShowTime, watermarkShowSpeed);
                     if (watermarkEnabled) {
                         eglEncoder.setWatermarkEnabled(true);
                     }

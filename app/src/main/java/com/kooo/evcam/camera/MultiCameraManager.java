@@ -3,6 +3,7 @@ package com.kooo.evcam.camera;
 
 import com.kooo.evcam.AppConfig;
 import com.kooo.evcam.AppLog;
+import com.kooo.evcam.VehicleSpeedProvider;
 import com.kooo.evcam.FileTransferManager;
 import com.kooo.evcam.StorageHelper;
 import android.content.Context;
@@ -285,6 +286,33 @@ public class MultiCameraManager {
      */
     public SingleCamera getCamera(String position) {
         return cameras.get(position);
+    }
+
+    /**
+     * 补盲/悬浮窗场景获取摄像头。
+     * 领克全景模式下只有一路 2x2 拼接摄像头（front），其他方向没有独立摄像头，
+     * 此时返回全景摄像头，由悬浮窗通过 setPanoramicFloatingDirection() 指定裁切方向。
+     */
+    /**
+     * 配置录制角标：时间/车速任一开启即启用角标；开启车速时启动车速轮询
+     */
+    private void applyWatermarkConfig(CodecVideoRecorder codecRecorder, AppConfig appConfig) {
+        boolean showTime = appConfig.isTimestampWatermarkEnabled();
+        boolean showSpeed = appConfig.isSpeedWatermarkEnabled();
+        if (showSpeed) {
+            VehicleSpeedProvider.getInstance(context).start();
+        }
+        codecRecorder.setWatermarkContent(showTime, showSpeed);
+        codecRecorder.setWatermarkEnabled(showTime || showSpeed);
+    }
+
+    public SingleCamera getCameraForBlindSpot(String position) {
+        SingleCamera camera = cameras.get(position);
+        if (camera != null) return camera;
+        for (SingleCamera c : cameras.values()) {
+            if (c != null && c.isPanoramicMode()) return c;
+        }
+        return null;
     }
 
     public void updatePreviewTextureViews(TextureView frontView,
@@ -1252,8 +1280,8 @@ public class MultiCameraManager {
                     encodeWidth + "x" + encodeHeight +
                     " @ " + targetFrameRate + "fps, " + AppConfig.formatBitrate(bitrate));
 
-            // 设置时间水印（从配置读取，使用方法开头已创建的 appConfig）
-            codecRecorder.setWatermarkEnabled(appConfig.isTimestampWatermarkEnabled());
+            // 设置时间/车速角标（从配置读取，使用方法开头已创建的 appConfig）
+            applyWatermarkConfig(codecRecorder, appConfig);
 
             // 设置回调
             codecRecorder.setCallback(new RecordCallback() {
@@ -1584,7 +1612,7 @@ public class MultiCameraManager {
             codecRecorder.setFrameRate(appConfig.getActualFrameRate(25));  // 使用25fps降低CPU占用
             codecRecorder.setQualityLevel(3);  // 设置最高画质
             codecRecorder.setForceH264(appConfig.isForceH264Encoding());
-            codecRecorder.setWatermarkEnabled(appConfig.isTimestampWatermarkEnabled());
+            applyWatermarkConfig(codecRecorder, appConfig);
 
             // 准备录制
             String path = new File(saveDir, timestamp + "_" + key + ".mp4").getAbsolutePath();
@@ -1658,6 +1686,9 @@ public class MultiCameraManager {
      */
     public void stopRecording(boolean skipRelayTransfer) {
         AppLog.d(TAG, "stopRecording called, isRecording=" + isRecording + ", useCodecRecording=" + useCodecRecording + ", skipRelayTransfer=" + skipRelayTransfer);
+
+        // 录制结束，停止车速轮询
+        VehicleSpeedProvider.getInstance(context).stop();
 
         // 立即标记停止状态，防止新的录制请求
         final boolean wasRecording = isRecording;

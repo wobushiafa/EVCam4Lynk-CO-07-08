@@ -78,6 +78,7 @@ public class BlindSpotService extends Service {
     private LogcatSignalObserver logcatSignalObserver;
     private VhalSignalObserver vhalSignalObserver;
     private CarSignalManagerObserver carSignalManagerObserver;
+    private LynkAdaptApiSignalObserver lynkAdaptApiSignalObserver;
     private DoorSignalObserver doorSignalObserver; // 车门联动观察者
     private final Handler hideHandler = new Handler(Looper.getMainLooper());
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -256,7 +257,9 @@ public class BlindSpotService extends Service {
         stopSignalObservers();
 
         String mode = appConfig.getTurnSignalTriggerMode();
-        if (appConfig.isCarSignalManagerTriggerMode()) {
+        if (appConfig.isLynkAdaptApiTriggerMode()) {
+            initLynkAdaptApiObserver();
+        } else if (appConfig.isCarSignalManagerTriggerMode()) {
             initCarSignalManagerObserver();
         } else if (appConfig.isVhalGrpcTriggerMode()) {
             initVhalSignalObserver();
@@ -281,7 +284,12 @@ public class BlindSpotService extends Service {
                 && !appConfig.isCustomKeyWakeupEnabled()) return;
 
         boolean needReinit = false;
-        if (appConfig.isCarSignalManagerTriggerMode()) {
+        if (appConfig.isLynkAdaptApiTriggerMode()) {
+            if (lynkAdaptApiSignalObserver == null || !lynkAdaptApiSignalObserver.isAlive()) {
+                AppLog.w(TAG, "AdaptAPI observer dead, reinitializing");
+                needReinit = true;
+            }
+        } else if (appConfig.isCarSignalManagerTriggerMode()) {
             if (carSignalManagerObserver == null || !carSignalManagerObserver.isAlive()) {
                 AppLog.w(TAG, "CarSignalManager observer dead, reinitializing");
                 needReinit = true;
@@ -355,6 +363,32 @@ public class BlindSpotService extends Service {
             }
         });
         carSignalManagerObserver.start();
+    }
+
+    private void initLynkAdaptApiObserver() {
+        AppLog.d(TAG, "Using Lynk AdaptAPI trigger mode");
+
+        lynkAdaptApiSignalObserver = new LynkAdaptApiSignalObserver(this, new LynkAdaptApiSignalObserver.TurnSignalListener() {
+            @Override
+            public void onTurnSignal(String direction, boolean on) {
+                if (!appConfig.isBlindSpotGlobalEnabled()) return;
+                if (!appConfig.isTurnSignalLinkageEnabled()) return;
+
+                if (on) {
+                    // 观察者内部已做闪烁去抖，输出的是稳定的开/关状态，
+                    // 与 CarSignalManager 模式一致，不走 handleTurnSignal() 的 debounce 保活
+                    showBlindSpotCamera(direction);
+                } else {
+                    startHideTimer();
+                }
+            }
+
+            @Override
+            public void onConnectionStateChanged(boolean connected) {
+                AppLog.d(TAG, "Lynk AdaptAPI connection: " + (connected ? "connected" : "disconnected"));
+            }
+        });
+        lynkAdaptApiSignalObserver.start();
     }
 
     /**
@@ -598,6 +632,10 @@ public class BlindSpotService extends Service {
             carSignalManagerObserver.stop();
             carSignalManagerObserver = null;
         }
+        if (lynkAdaptApiSignalObserver != null) {
+            lynkAdaptApiSignalObserver.stop();
+            lynkAdaptApiSignalObserver = null;
+        }
         if (doorSignalObserver != null) {
             doorSignalObserver.stop();
             doorSignalObserver = null;
@@ -699,7 +737,7 @@ public class BlindSpotService extends Service {
         {
             MultiCameraManager cm = com.kooo.evcam.camera.CameraManagerHolder.getInstance().getCameraManager();
             if (cm != null) {
-                SingleCamera cam = cm.getCamera(cameraPos);
+                SingleCamera cam = cm.getCameraForBlindSpot(cameraPos);
                 if (cam != null && !cam.isCameraOpened()) {
                     CameraForegroundService.whenReady(this, cam::openCameraDeferred);
                 }
@@ -838,7 +876,7 @@ public class BlindSpotService extends Service {
         {
             MultiCameraManager cm = com.kooo.evcam.camera.CameraManagerHolder.getInstance().getCameraManager();
             if (cm != null) {
-                SingleCamera cam = cm.getCamera(cameraPos);
+                SingleCamera cam = cm.getCameraForBlindSpot(cameraPos);
                 if (cam != null && !cam.isCameraOpened()) {
                     // 直接打开相机，不等待服务就绪回调，减少延迟
                     cam.openCameraDeferred();
@@ -942,8 +980,8 @@ public class BlindSpotService extends Service {
         // 提前打开左右相机
         MultiCameraManager cm = com.kooo.evcam.camera.CameraManagerHolder.getInstance().getCameraManager();
         if (cm != null) {
-            SingleCamera leftCam = cm.getCamera("left");
-            SingleCamera rightCam = cm.getCamera("right");
+            SingleCamera leftCam = cm.getCameraForBlindSpot("left");
+            SingleCamera rightCam = cm.getCameraForBlindSpot("right");
             if (leftCam != null && !leftCam.isCameraOpened()) {
                 CameraForegroundService.whenReady(this, leftCam::openCameraDeferred);
             }
@@ -994,11 +1032,13 @@ public class BlindSpotService extends Service {
             return;
         }
 
-        SingleCamera newCamera = cameraManager.getCamera(cameraPos);
+        SingleCamera newCamera = cameraManager.getCameraForBlindSpot(cameraPos);
         if (newCamera == null) {
             scheduleSecondaryRetry(cameraPos);
             return;
         }
+        // 领克全景：左右切换为同一摄像头，仅更新裁切方向
+        newCamera.setPanoramicFloatingDirection(cameraPos);
         
         boolean surfaceReady = secondaryTextureView != null && secondaryTextureView.isAvailable()
             && secondaryCachedSurface != null && secondaryCachedSurface.isValid();
@@ -1131,7 +1171,7 @@ public class BlindSpotService extends Service {
     private void preOpenCamera(String cameraPos) {
         MultiCameraManager cameraManager = com.kooo.evcam.camera.CameraManagerHolder.getInstance().getCameraManager();
         if (cameraManager == null) return;
-        SingleCamera cam = cameraManager.getCamera(cameraPos);
+        SingleCamera cam = cameraManager.getCameraForBlindSpot(cameraPos);
         if (cam != null && !cam.isCameraOpened()) {
             AppLog.d(TAG, "预触发相机打开（与UI并行）: " + cameraPos);
             CameraForegroundService.whenReady(this, cam::openCamera);
@@ -1310,7 +1350,7 @@ public class BlindSpotService extends Service {
         {
             MultiCameraManager cm = com.kooo.evcam.camera.CameraManagerHolder.getInstance().getCameraManager();
             if (cm != null) {
-                SingleCamera cam = cm.getCamera(side);
+                SingleCamera cam = cm.getCameraForBlindSpot(side);
                 if (cam != null && !cam.isCameraOpened()) {
                     CameraForegroundService.whenReady(this, cam::openCameraDeferred);
                 }

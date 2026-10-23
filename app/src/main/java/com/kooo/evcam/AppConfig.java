@@ -134,6 +134,7 @@ public class AppConfig {
     public static final String TRIGGER_MODE_LOGCAT = "logcat";            // Logcat 日志触发
     public static final String TRIGGER_MODE_VHAL_GRPC = "vhal_grpc";      // 车辆API 触发（银河E5/26款星舰7，默认）
     public static final String TRIGGER_MODE_CAR_SIGNAL_MANAGER = "car_signal_manager"; // CarSignalManager API 触发（银河L6/L7）
+    public static final String TRIGGER_MODE_LYNK_ADAPT_API = "lynk_adapt_api"; // ECARX AdaptAPI 1.x 触发（老款领克07/08，默认）
     
     // 兼容性别名（保持向后兼容）
     public static final String TRIGGER_MODE_CAR_API = TRIGGER_MODE_VHAL_GRPC;
@@ -183,6 +184,7 @@ public class AppConfig {
 
     // 时间角标配置
     private static final String KEY_TIMESTAMP_WATERMARK_ENABLED = "timestamp_watermark_enabled";  // 时间角标开关
+    private static final String KEY_SPEED_WATERMARK_ENABLED = "speed_watermark_enabled";  // 车速角标开关
 
     // 视频编码器配置
     private static final String KEY_FORCE_H264_ENCODING = "force_h264_encoding";  // 强制使用 H.264 编码器（关闭默认使用 H.265/HEVC）
@@ -2361,7 +2363,7 @@ public class AppConfig {
      * 获取转向灯触发模式
      */
     public String getTurnSignalTriggerMode() {
-        return prefs.getString(KEY_TURN_SIGNAL_TRIGGER_MODE, TRIGGER_MODE_VHAL_GRPC);
+        return prefs.getString(KEY_TURN_SIGNAL_TRIGGER_MODE, TRIGGER_MODE_LYNK_ADAPT_API);
     }
 
     /**
@@ -2387,6 +2389,13 @@ public class AppConfig {
     }
 
     /**
+     * 是否使用 AdaptAPI 触发模式（老款领克07/08）
+     */
+    public boolean isLynkAdaptApiTriggerMode() {
+        return TRIGGER_MODE_LYNK_ADAPT_API.equals(getTurnSignalTriggerMode());
+    }
+
+    /**
      * 保存用户选择的转向灯预设选项（用于恢复具体的 RadioButton 选择）
      * @param presetName 预设名称，如 "l6l7" 或 "boyue_l"
      */
@@ -2400,7 +2409,7 @@ public class AppConfig {
      * @return 预设名称，如 "l6l7" 或 "boyue_l"
      */
     public String getTurnSignalPresetSelection() {
-        return prefs.getString(KEY_TURN_SIGNAL_PRESET_SELECTION, "l6l7"); // 默认返回 l6l7
+        return prefs.getString(KEY_TURN_SIGNAL_PRESET_SELECTION, "lynk0708"); // 默认返回 老款领克07/08
     }
 
     // ==================== 车门联动配置 ====================
@@ -2595,6 +2604,21 @@ public class AppConfig {
     public boolean isTimestampWatermarkEnabled() {
         // 默认关闭时间角标
         return prefs.getBoolean(KEY_TIMESTAMP_WATERMARK_ENABLED, false);
+    }
+
+    /**
+     * 设置车速角标开关（录制视频中叠加车速，仅 MediaCodec 模式有效）
+     */
+    public void setSpeedWatermarkEnabled(boolean enabled) {
+        prefs.edit().putBoolean(KEY_SPEED_WATERMARK_ENABLED, enabled).apply();
+        AppLog.d(TAG, "车速角标设置: " + (enabled ? "启用" : "禁用"));
+    }
+
+    /**
+     * 获取车速角标开关状态，默认开启
+     */
+    public boolean isSpeedWatermarkEnabled() {
+        return prefs.getBoolean(KEY_SPEED_WATERMARK_ENABLED, true);
     }
 
     // ==================== 视频编码器配置相关方法 ====================

@@ -196,7 +196,7 @@ public class BlindSpotFloatingWindowView extends FrameLayout {
             public void onSurfaceTextureAvailable(android.graphics.SurfaceTexture surface, int width, int height) {
                 MultiCameraManager cm = CameraManagerHolder.getInstance().getCameraManager();
                 if (cm != null) {
-                    SingleCamera camera = cm.getCamera(cameraPos);
+                    SingleCamera camera = cm.getCameraForBlindSpot(cameraPos);
                     if (camera != null) {
                         Size previewSize = camera.getPreviewSize();
                         if (previewSize != null) {
@@ -875,7 +875,7 @@ public class BlindSpotFloatingWindowView extends FrameLayout {
             if (st != null) {
                 MultiCameraManager cm = CameraManagerHolder.getInstance().getCameraManager();
                 if (cm != null) {
-                    SingleCamera camera = cm.getCamera(cameraPos);
+                    SingleCamera camera = cm.getCameraForBlindSpot(cameraPos);
                     if (camera != null) {
                         Size previewSize = camera.getPreviewSize();
                         if (previewSize != null) {
@@ -908,11 +908,12 @@ public class BlindSpotFloatingWindowView extends FrameLayout {
             }
         }
 
-        currentCamera = cameraManager.getCamera(cameraPos);
+        currentCamera = cameraManager.getCameraForBlindSpot(cameraPos);
         if (currentCamera == null) {
             scheduleRetryBind();
             return;
         }
+        currentCamera.setPanoramicFloatingDirection(cameraPos);
         // 传递 SurfaceTexture 引用，便于 createCameraPreviewSession 统一设置 buffer 尺寸
         android.graphics.SurfaceTexture st = (textureView != null && textureView.isAvailable()) ? textureView.getSurfaceTexture() : null;
         currentCamera.setMainFloatingSurface(surface, st);

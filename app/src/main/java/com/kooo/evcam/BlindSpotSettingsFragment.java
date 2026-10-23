@@ -218,7 +218,12 @@ public class BlindSpotSettingsFragment extends Fragment {
         }
 
         // 根据触发模式和当前关键词匹配预设
-        if (appConfig.isCarSignalManagerTriggerMode()) {
+        if (appConfig.isLynkAdaptApiTriggerMode()) {
+            turnSignalPresetGroup.check(R.id.rb_preset_lynk0708);
+            customKeywordsLayout.setVisibility(View.GONE);
+            carApiStatusText.setVisibility(View.VISIBLE);
+            checkLynkAdaptApiConnection();
+        } else if (appConfig.isCarSignalManagerTriggerMode()) {
             // CarSignalManager 模式：根据保存的预设选择恢复 RadioButton
             String presetSelection = appConfig.getTurnSignalPresetSelection();
             if ("boyue_l".equals(presetSelection)) {
@@ -386,7 +391,19 @@ public class BlindSpotSettingsFragment extends Fragment {
 
         // 预设方案选择
         turnSignalPresetGroup.setOnCheckedChangeListener((group, checkedId) -> {
-            if (checkedId == R.id.rb_preset_l6l7 || checkedId == R.id.rb_preset_boyue_l) {
+            if (checkedId == R.id.rb_preset_lynk0708) {
+                // AdaptAPI 模式（老款领克07/08）
+                customKeywordsLayout.setVisibility(View.GONE);
+                carApiStatusText.setVisibility(View.VISIBLE);
+                appConfig.setTurnSignalTriggerMode(AppConfig.TRIGGER_MODE_LYNK_ADAPT_API);
+                appConfig.setTurnSignalPresetSelection("lynk0708");
+
+                // 更新车门联动区域可见性（暂不支持，会自动关闭）
+                updateDoorLinkageVisibility();
+
+                checkLynkAdaptApiConnection();
+                BlindSpotService.update(requireContext());
+            } else if (checkedId == R.id.rb_preset_l6l7 || checkedId == R.id.rb_preset_boyue_l) {
                 // CarSignalManager API 模式
                 customKeywordsLayout.setVisibility(View.GONE);
                 carApiStatusText.setVisibility(View.VISIBLE);
@@ -704,6 +721,32 @@ public class BlindSpotSettingsFragment extends Fragment {
                         carApiStatusText.setTextColor(0xFF4CAF50); // green
                     } else {
                         carApiStatusText.setText("车辆API 服务状态: ✗ 服务不可达");
+                        carApiStatusText.setTextColor(0xFFF44336); // red
+                    }
+                });
+            }
+        }).start();
+    }
+
+    /**
+     * 异步检查 AdaptAPI（老款领克07/08）连接状态并更新 UI
+     */
+    private void checkLynkAdaptApiConnection() {
+        if (carApiStatusText == null) return;
+        carApiStatusText.setText("AdaptAPI 服务状态: 检测中...");
+        carApiStatusText.setTextColor(getResources().getColor(R.color.text_secondary, null));
+
+        final android.content.Context appContext = requireContext().getApplicationContext();
+        new Thread(() -> {
+            boolean reachable = LynkAdaptApiSignalObserver.testConnection(appContext);
+            if (getActivity() != null && isAdded()) {
+                getActivity().runOnUiThread(() -> {
+                    if (carApiStatusText == null) return;
+                    if (reachable) {
+                        carApiStatusText.setText("AdaptAPI 服务状态: ✓ 已连接");
+                        carApiStatusText.setTextColor(0xFF4CAF50); // green
+                    } else {
+                        carApiStatusText.setText("AdaptAPI 服务状态: ✗ 服务不可达");
                         carApiStatusText.setTextColor(0xFFF44336); // red
                     }
                 });

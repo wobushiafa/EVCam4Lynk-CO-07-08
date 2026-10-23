@@ -10,3 +10,5 @@ local.properties
 *.log
 captures/
 .trae/
+# Vehicle system API docs (local only)
+/docs-vehicle-api/

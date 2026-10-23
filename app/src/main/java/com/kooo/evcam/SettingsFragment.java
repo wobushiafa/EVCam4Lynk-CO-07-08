@@ -55,6 +55,7 @@ public class SettingsFragment extends Fragment {
     // private SwitchMaterial preventSleepSwitch;
     private SwitchMaterial recordingStatsSwitch;
     private SwitchMaterial timestampWatermarkSwitch;
+    private SwitchMaterial speedWatermarkSwitch;
     private SwitchMaterial forceH264Switch;
     
     // 预览画面矫正相关
@@ -292,6 +293,20 @@ public class SettingsFragment extends Fragment {
             if (getContext() != null && appConfig != null) {
                 appConfig.setTimestampWatermarkEnabled(isChecked);
                 String message = isChecked ? "时间角标已开启" : "时间角标已关闭";
+                Toast.makeText(getContext(), message, Toast.LENGTH_SHORT).show();
+                AppLog.d("SettingsFragment", message);
+            }
+        });
+
+        // 初始化车速角标开关
+        speedWatermarkSwitch = view.findViewById(R.id.switch_speed_watermark);
+        if (getContext() != null && appConfig != null) {
+            speedWatermarkSwitch.setChecked(appConfig.isSpeedWatermarkEnabled());
+        }
+        speedWatermarkSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (getContext() != null && appConfig != null) {
+                appConfig.setSpeedWatermarkEnabled(isChecked);
+                String message = isChecked ? "车速角标已开启（下次录制生效）" : "车速角标已关闭（下次录制生效）";
                 Toast.makeText(getContext(), message, Toast.LENGTH_SHORT).show();
                 AppLog.d("SettingsFragment", message);
             }

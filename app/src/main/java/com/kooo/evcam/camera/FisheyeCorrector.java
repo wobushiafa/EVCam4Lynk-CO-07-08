@@ -376,6 +376,15 @@ public class FisheyeCorrector {
     /**
      * 检查是否存在指定标识的附加输出
      */
+    /**
+     * 更新已存在附加输出的裁切/旋转/矫正参数，下一帧生效（不重建 EGL Surface）
+     */
+    public void setOutputParams(String tag, float[] crop, int rotation, boolean distort) {
+        if (extraOutputParams.containsKey(tag)) {
+            extraOutputParams.put(tag, new OutputParams(crop, rotation, distort));
+        }
+    }
+
     public boolean hasOutputSurface(String tag) {
         return extraEglSurfaces.containsKey(tag);
     }

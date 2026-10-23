@@ -131,7 +131,7 @@ public class MainFloatingWindowView extends FrameLayout {
                 String cameraPos = desiredCameraPos != null ? desiredCameraPos : appConfig.getMainFloatingCamera();
                 MultiCameraManager cm = CameraManagerHolder.getInstance().getCameraManager();
                 if (cm != null) {
-                    SingleCamera camera = cm.getCamera(cameraPos);
+                    SingleCamera camera = cm.getCameraForBlindSpot(cameraPos);
                     if (camera != null) {
                         Size previewSize = camera.getPreviewSize();
                         if (previewSize != null) {
@@ -231,7 +231,7 @@ public class MainFloatingWindowView extends FrameLayout {
                         String cameraPos = desiredCameraPos != null ? desiredCameraPos : appConfig.getMainFloatingCamera();
                         MultiCameraManager cm = CameraManagerHolder.getInstance().getCameraManager();
                         if (cm != null) {
-                            SingleCamera camera = cm.getCamera(cameraPos);
+                            SingleCamera camera = cm.getCameraForBlindSpot(cameraPos);
                             if (camera != null) {
                                 Size previewSize = camera.getPreviewSize();
                                 if (previewSize != null) {
@@ -351,11 +351,12 @@ public class MainFloatingWindowView extends FrameLayout {
             }
         }
 
-        currentCamera = cameraManager.getCamera(cameraPos);
+        currentCamera = cameraManager.getCameraForBlindSpot(cameraPos);
         if (currentCamera == null) {
             scheduleRetryBind();
             return;
         }
+        currentCamera.setPanoramicFloatingDirection(cameraPos);
 
         cancelRetryBind();
 
@@ -564,7 +565,11 @@ public class MainFloatingWindowView extends FrameLayout {
             return;
         }
 
-        SingleCamera newCamera = cameraManager.getCamera(cameraPos);
+        SingleCamera newCamera = cameraManager.getCameraForBlindSpot(cameraPos);
+        if (newCamera != null) {
+            // 领克全景：左右切换为同一摄像头，仅更新裁切方向
+            newCamera.setPanoramicFloatingDirection(cameraPos);
+        }
         if (newCamera == currentCamera) {
             AppLog.d(TAG, "Camera same as current, skip updateCamera: " + cameraPos);
             return;

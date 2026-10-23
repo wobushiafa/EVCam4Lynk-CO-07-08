@@ -151,7 +151,9 @@ public class EglSurfaceEncoder {
     private int watermarkOesTextureHandle;
     private Bitmap watermarkBitmap;
     private String lastWatermarkTime = "";
-    private static final int WATERMARK_WIDTH = 400;   // 水印纹理宽度（需容纳19字符的时间戳）
+    private boolean watermarkShowTime = true;   // 角标显示时间
+    private boolean watermarkShowSpeed = false; // 角标显示车速
+    private static final int WATERMARK_WIDTH = 560;   // 水印纹理宽度（需容纳19字符时间戳 + 车速）
     private static final int WATERMARK_HEIGHT = 44;   // 水印纹理高度
     private final SimpleDateFormat watermarkDateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault());
     
@@ -238,6 +240,16 @@ public class EglSurfaceEncoder {
         if (isInitialized && enabled && watermarkProgram == 0) {
             initWatermarkGl();
         }
+    }
+
+    /**
+     * 设置角标内容
+     * @param showTime 显示时间
+     * @param showSpeed 显示车速（来自 VehicleSpeedProvider）
+     */
+    public void setWatermarkContent(boolean showTime, boolean showSpeed) {
+        this.watermarkShowTime = showTime;
+        this.watermarkShowSpeed = showSpeed;
     }
 
     /**
@@ -769,9 +781,20 @@ public class EglSurfaceEncoder {
             return;
         }
 
-        String currentTime = watermarkDateFormat.format(new Date());
-        
-        // 只有时间变化时才更新
+        StringBuilder text = new StringBuilder();
+        if (watermarkShowTime) {
+            text.append(watermarkDateFormat.format(new Date()));
+        }
+        if (watermarkShowSpeed) {
+            String speed = com.kooo.evcam.VehicleSpeedProvider.currentDisplayText();
+            if (!speed.isEmpty()) {
+                if (text.length() > 0) text.append("  ");
+                text.append(speed);
+            }
+        }
+        String currentTime = text.toString();
+
+        // 只有内容变化时才更新
         if (currentTime.equals(lastWatermarkTime)) {
             return;
         }
