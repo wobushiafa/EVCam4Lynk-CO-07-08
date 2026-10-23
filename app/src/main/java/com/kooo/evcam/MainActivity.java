@@ -87,6 +87,11 @@ public class MainActivity extends AppCompatActivity {
 
     private AutoFitTextureView textureFront, textureBack, textureLeft, textureRight;
     private final java.util.Map<String, android.graphics.Matrix> previewBaseTransforms = new java.util.HashMap<>();
+    // 领克全景布局：四个方向小窗（GL 管线从摄像头0的 2x2 拼接画面裁切）
+    private static final String[] LYNK_DIRECTIONS = {"front", "back", "left", "right"};
+    private final java.util.Map<String, TextureView> lynkPanoramicViews = new java.util.HashMap<>();
+    private final java.util.Map<String, View> lynkPanoramicContainers = new java.util.HashMap<>();
+    private TextView labelLynkMain;
     private PreviewCorrectionFloatingWindow previewCorrectionFloatingWindow;
     private FisheyeCorrectionFloatingWindow fisheyeCorrectionFloatingWindow;
 
@@ -940,9 +945,23 @@ public class MainActivity extends AppCompatActivity {
         requiredTextureCount = 4;
 
         String carModel = appConfig.getCarModel();
-        
+
+        // 领克07/08：主画面 + 四方向小窗（单摄像头 2x2 拼接画面）
+        if (AppConfig.CAR_MODEL_LYNKCO_07.equals(carModel)) {
+            layoutId = R.layout.activity_main_lynkco07;
+            configuredCameraCount = 1;
+            requiredTextureCount = 1;  // 仅等待主画面，小窗就绪后动态加入 GL 管线
+            AppLog.d(TAG, "使用领克07/08配置：主画面+四方向小窗布局");
+        }
+        // 领克08加包：0(AVM环视)+6(座舱)
+        else if (AppConfig.CAR_MODEL_LYNKCO_08_PLUS.equals(carModel)) {
+            layoutId = R.layout.activity_main_2cam;
+            configuredCameraCount = 2;
+            requiredTextureCount = 2;
+            AppLog.d(TAG, "使用领克08加包配置：2摄像头布局（前=AVM环视，后=座舱）");
+        }
         // 银河E5-多按钮：横屏布局，左侧按钮列表
-        if (AppConfig.CAR_MODEL_E5_MULTI.equals(carModel)) {
+        else if (AppConfig.CAR_MODEL_E5_MULTI.equals(carModel)) {
             layoutId = R.layout.activity_main_e5_multi;
             configuredCameraCount = 4;
             requiredTextureCount = 4;
@@ -1150,6 +1169,107 @@ public class MainActivity extends AppCompatActivity {
         }
         if (textureRight != null && configuredCameraCount >= 4) {
             textureRight.setSurfaceTextureListener(buildSurfaceListener("right"));
+        }
+
+        initLynkCoPanoramicViews();
+    }
+
+    /**
+     * 领克全景布局：初始化四方向小窗及点击切换
+     */
+    private void initLynkCoPanoramicViews() {
+        if (!appConfig.isLynkCoPanoramicCarModel()) return;
+
+        labelLynkMain = findViewById(R.id.label_main);
+        int[] textureIds = {R.id.texture_lynk_front, R.id.texture_lynk_back, R.id.texture_lynk_left, R.id.texture_lynk_right};
+        int[] containerIds = {R.id.preview_lynk_front_container, R.id.preview_lynk_back_container,
+                R.id.preview_lynk_left_container, R.id.preview_lynk_right_container};
+        for (int i = 0; i < LYNK_DIRECTIONS.length; i++) {
+            String direction = LYNK_DIRECTIONS[i];
+            TextureView view = findViewById(textureIds[i]);
+            View container = findViewById(containerIds[i]);
+            if (view == null) continue;
+            lynkPanoramicViews.put(direction, view);
+            view.setSurfaceTextureListener(buildLynkPanoramicSurfaceListener(direction, view));
+            if (container != null) {
+                lynkPanoramicContainers.put(direction, container);
+                container.setOnClickListener(v -> switchLynkMainPreview(direction));
+            }
+        }
+
+        // 点击主画面切回完整拼接画面
+        View mainContainer = findViewById(R.id.main_preview_container);
+        if (mainContainer != null) {
+            mainContainer.setOnClickListener(v -> switchLynkMainPreview(null));
+        }
+    }
+
+    private TextureView.SurfaceTextureListener buildLynkPanoramicSurfaceListener(String direction, TextureView view) {
+        return new TextureView.SurfaceTextureListener() {
+            @Override
+            public void onSurfaceTextureAvailable(@NonNull android.graphics.SurfaceTexture surface, int width, int height) {
+                SingleCamera camera = cameraManager != null ? cameraManager.getCamera("front") : null;
+                if (camera != null) {
+                    camera.setPanoramicView(direction, view);
+                }
+            }
+
+            @Override
+            public void onSurfaceTextureSizeChanged(@NonNull android.graphics.SurfaceTexture surface, int width, int height) {
+            }
+
+            @Override
+            public boolean onSurfaceTextureDestroyed(@NonNull android.graphics.SurfaceTexture surface) {
+                SingleCamera camera = cameraManager != null ? cameraManager.getCamera("front") : null;
+                if (camera != null) {
+                    camera.setPanoramicView(direction, null);
+                }
+                return true;
+            }
+
+            @Override
+            public void onSurfaceTextureUpdated(@NonNull android.graphics.SurfaceTexture surface) {
+            }
+        };
+    }
+
+    /**
+     * 领克全景布局：启用摄像头全景模式并绑定已就绪的小窗（摄像头初始化或复用后调用）
+     */
+    private void bindLynkCoPanoramicViews() {
+        if (!appConfig.isLynkCoPanoramicCarModel() || cameraManager == null) return;
+        SingleCamera camera = cameraManager.getCamera("front");
+        if (camera == null) return;
+        camera.setPanoramicMode(true);
+        for (java.util.Map.Entry<String, TextureView> entry : lynkPanoramicViews.entrySet()) {
+            if (entry.getValue().isAvailable()) {
+                camera.setPanoramicView(entry.getKey(), entry.getValue());
+            }
+        }
+        updateLynkMainPreviewUi(camera.getPanoramicMainDirection());
+    }
+
+    /**
+     * 领克全景布局：切换主画面显示内容
+     * @param direction front/back/left/right，null 表示完整拼接画面
+     */
+    private void switchLynkMainPreview(String direction) {
+        SingleCamera camera = cameraManager != null ? cameraManager.getCamera("front") : null;
+        if (camera == null) return;
+        if (direction != null && direction.equals(camera.getPanoramicMainDirection())) {
+            direction = null;  // 再次点击当前方向，切回完整画面
+        }
+        camera.setPanoramicMainDirection(direction);
+        updateLynkMainPreviewUi(direction);
+    }
+
+    private void updateLynkMainPreviewUi(String direction) {
+        if (labelLynkMain != null) {
+            labelLynkMain.setText(direction == null ? "全景" : appConfig.getDefaultCameraName(direction));
+        }
+        for (java.util.Map.Entry<String, View> entry : lynkPanoramicContainers.entrySet()) {
+            entry.getValue().setBackgroundResource(entry.getKey().equals(direction)
+                    ? R.drawable.preview_border_selected : R.drawable.preview_border);
         }
     }
 
@@ -2469,6 +2589,9 @@ public class MainActivity extends AppCompatActivity {
                 });
             });
 
+            // 领克全景布局：需在重建 session 前启用全景模式并登记小窗
+            bindLynkCoPanoramicViews();
+
             // 绑定 TextureView
             cameraManager.updatePreviewTextureViews(textureFront, textureBack, textureLeft, textureRight);
 
@@ -2736,7 +2859,10 @@ public class MainActivity extends AppCompatActivity {
 
                 // 根据车型配置初始化摄像头
                 String carModel = appConfig.getCarModel();
-                if (AppConfig.CAR_MODEL_L7.equals(carModel) || AppConfig.CAR_MODEL_L7_MULTI.equals(carModel)) {
+                if (appConfig.isLynkCoCarModel()) {
+                    // 领克07/08 / 08加包：使用配置的摄像头编号
+                    initCamerasForLynkCo(cameraIds);
+                } else if (AppConfig.CAR_MODEL_L7.equals(carModel) || AppConfig.CAR_MODEL_L7_MULTI.equals(carModel)) {
                     // 银河L6/L7 / L7-多按钮：使用固定映射
                     initCamerasForL7(cameraIds);
                 } else if (AppConfig.CAR_MODEL_PHONE.equals(carModel)) {
@@ -2794,6 +2920,35 @@ public class MainActivity extends AppCompatActivity {
         });
     }
     
+    /**
+     * 领克车型：07/08 仅摄像头0（2x2 拼接画面，开启全景模式）；08加包为 0+6
+     */
+    private void initCamerasForLynkCo(String[] cameraIds) {
+        java.util.List<String> available = java.util.Arrays.asList(cameraIds);
+        String frontId = appConfig.getCameraId("front");
+        if (!available.contains(frontId)) {
+            if (cameraIds.length == 0) {
+                Toast.makeText(this, "没有可用的摄像头", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            AppLog.w(TAG, "领克配置的摄像头ID无效: " + frontId + "，改用: " + cameraIds[0]);
+            frontId = cameraIds[0];
+        }
+
+        if (appConfig.isLynkCoPanoramicCarModel()) {
+            cameraManager.initCameras(frontId, textureFront, null, null, null, null, null, null);
+            bindLynkCoPanoramicViews();
+        } else {
+            String backId = appConfig.getCameraId("back");
+            if (!available.contains(backId)) {
+                AppLog.w(TAG, "领克08加包后摄像头ID无效: " + backId + "，仅打开前摄像头");
+                backId = null;
+            }
+            cameraManager.initCameras(frontId, textureFront, backId, backId != null ? textureBack : null,
+                    null, null, null, null);
+        }
+    }
+
     /**
      * 银河E5车型：使用固定的摄像头映射
      */

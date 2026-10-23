@@ -108,7 +108,7 @@ public class CameraManagerHolder {
         String carModel = appConfig.getCarModel();
         if (AppConfig.CAR_MODEL_PHONE.equals(carModel)) {
             return 2;
-        } else if (appConfig.isCustomCarModel()) {
+        } else if (appConfig.isCustomCarModel() || appConfig.isLynkCoCarModel()) {
             return appConfig.getCameraCount();
         }
         return 4; // E5, L7, Xinghan7 等默认4摄
@@ -120,7 +120,9 @@ public class CameraManagerHolder {
     private void initCamerasByCarModel(AppConfig appConfig, String[] cameraIds) {
         String carModel = appConfig.getCarModel();
 
-        if (AppConfig.CAR_MODEL_L7.equals(carModel) || AppConfig.CAR_MODEL_L7_MULTI.equals(carModel)) {
+        if (appConfig.isLynkCoCarModel()) {
+            initCamerasForLynkCo(appConfig);
+        } else if (AppConfig.CAR_MODEL_L7.equals(carModel) || AppConfig.CAR_MODEL_L7_MULTI.equals(carModel)) {
             initCamerasForL7(cameraIds);
         } else if (AppConfig.CAR_MODEL_PHONE.equals(carModel)) {
             initCamerasForPhone(cameraIds);
@@ -134,6 +136,20 @@ public class CameraManagerHolder {
         } else {
             // 银河E5（默认）
             initCamerasForGalaxyE5(cameraIds);
+        }
+    }
+
+    private void initCamerasForLynkCo(AppConfig appConfig) {
+        String frontId = appConfig.getCameraId("front");
+        if (appConfig.isLynkCoPanoramicCarModel()) {
+            cameraManager.initCameras(frontId, null, null, null, null, null, null, null);
+            SingleCamera camera = cameraManager.getCamera("front");
+            if (camera != null) {
+                camera.setPanoramicMode(true);
+            }
+        } else {
+            cameraManager.initCameras(frontId, null, appConfig.getCameraId("back"), null,
+                    null, null, null, null);
         }
     }
 

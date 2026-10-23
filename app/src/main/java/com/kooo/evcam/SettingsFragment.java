@@ -86,7 +86,13 @@ public class SettingsFragment extends Fragment {
     // 车型配置相关
     private Spinner carModelSpinner;
     private Button customCameraConfigButton;
-    private static final String[] CAR_MODEL_OPTIONS = {"银河E5", "银河A7", "银河E5-多按钮", "银河L6/L7", "银河L7-多按钮", "26款星舰7", "手机", "自定义车型", "多视角布局"};
+    private static final String[] CAR_MODEL_OPTIONS = {"领克07/08", "领克08加包", "银河E5", "银河A7", "银河E5-多按钮", "银河L6/L7", "银河L7-多按钮", "26款星舰7", "手机", "自定义车型", "多视角布局"};
+    // 与 CAR_MODEL_OPTIONS 一一对应
+    private static final String[] CAR_MODEL_VALUES = {
+            AppConfig.CAR_MODEL_LYNKCO_07, AppConfig.CAR_MODEL_LYNKCO_08_PLUS,
+            AppConfig.CAR_MODEL_GALAXY_E5, AppConfig.CAR_MODEL_GALAXY_A7, AppConfig.CAR_MODEL_E5_MULTI,
+            AppConfig.CAR_MODEL_L7, AppConfig.CAR_MODEL_L7_MULTI, AppConfig.CAR_MODEL_XINGHAN_7,
+            AppConfig.CAR_MODEL_PHONE, AppConfig.CAR_MODEL_CUSTOM, AppConfig.CAR_MODEL_MULTIVIEW};
     private boolean isInitializingCarModel = false;
     private String lastAppliedCarModel = null;
     
@@ -1157,40 +1163,12 @@ public class SettingsFragment extends Fragment {
         carModelSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                String newModel;
-                String modelName;
-                
-                if (position == 0) {
-                    newModel = AppConfig.CAR_MODEL_GALAXY_E5;
-                    modelName = "银河E5";
-                } else if (position == 1) {
-                    newModel = AppConfig.CAR_MODEL_GALAXY_A7;
-                    modelName = "银河A7";
-                } else if (position == 2) {
-                    newModel = AppConfig.CAR_MODEL_E5_MULTI;
-                    modelName = "银河E5-多按钮";
-                } else if (position == 3) {
-                    newModel = AppConfig.CAR_MODEL_L7;
-                    modelName = "银河L6/L7";
-                } else if (position == 4) {
-                    newModel = AppConfig.CAR_MODEL_L7_MULTI;
-                    modelName = "银河L7-多按钮";
-                } else if (position == 5) {
-                    newModel = AppConfig.CAR_MODEL_XINGHAN_7;
-                    modelName = "26款星舰7";
-                } else if (position == 6) {
-                    newModel = AppConfig.CAR_MODEL_PHONE;
-                    modelName = "手机";
-                } else if (position == 8) {
-                    newModel = AppConfig.CAR_MODEL_MULTIVIEW;
-                    modelName = "多视角布局";
-                } else {
-                    newModel = AppConfig.CAR_MODEL_CUSTOM;
-                    modelName = "自定义车型";
-                }
+                String newModel = CAR_MODEL_VALUES[position];
+                String modelName = CAR_MODEL_OPTIONS[position];
 
                 // 自定义车型和多视角布局显示配置按钮
-                updateCustomConfigButtonVisibility(position == 7 || position == 8);
+                updateCustomConfigButtonVisibility(AppConfig.CAR_MODEL_CUSTOM.equals(newModel)
+                        || AppConfig.CAR_MODEL_MULTIVIEW.equals(newModel));
 
                 if (isInitializingCarModel) {
                     return;
@@ -1202,7 +1180,15 @@ public class SettingsFragment extends Fragment {
 
                 lastAppliedCarModel = newModel;
                 appConfig.setCarModel(newModel);
-                
+
+                // 领克车型：写入默认摄像头编号（避免沿用其他车型保存的编号）
+                if (AppConfig.CAR_MODEL_LYNKCO_07.equals(newModel)) {
+                    appConfig.setCameraId("front", "0");
+                } else if (AppConfig.CAR_MODEL_LYNKCO_08_PLUS.equals(newModel)) {
+                    appConfig.setCameraId("front", "0");
+                    appConfig.setCameraId("back", "6");
+                }
+
                 // 切换车型时重置录制摄像头选择为全选（避免之前的设置导致无法录制）
                 appConfig.resetRecordingCameraSelection();
                 
@@ -1220,24 +1206,7 @@ public class SettingsFragment extends Fragment {
         });
         
         String currentModel = appConfig.getCarModel();
-        int selectedIndex = 0;
-        if (AppConfig.CAR_MODEL_GALAXY_A7.equals(currentModel)) {
-            selectedIndex = 1;
-        } else if (AppConfig.CAR_MODEL_E5_MULTI.equals(currentModel)) {
-            selectedIndex = 2;
-        } else if (AppConfig.CAR_MODEL_L7.equals(currentModel)) {
-            selectedIndex = 3;
-        } else if (AppConfig.CAR_MODEL_L7_MULTI.equals(currentModel)) {
-            selectedIndex = 4;
-        } else if (AppConfig.CAR_MODEL_XINGHAN_7.equals(currentModel)) {
-            selectedIndex = 5;
-        } else if (AppConfig.CAR_MODEL_PHONE.equals(currentModel)) {
-            selectedIndex = 6;
-        } else if (AppConfig.CAR_MODEL_CUSTOM.equals(currentModel)) {
-            selectedIndex = 7;
-        } else if (AppConfig.CAR_MODEL_MULTIVIEW.equals(currentModel)) {
-            selectedIndex = 8;
-        }
+        int selectedIndex = Math.max(0, java.util.Arrays.asList(CAR_MODEL_VALUES).indexOf(currentModel));
         carModelSpinner.setSelection(selectedIndex);
         
         carModelSpinner.post(() -> {

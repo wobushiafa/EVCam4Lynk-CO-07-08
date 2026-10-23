@@ -79,6 +79,14 @@ public class SingleCamera {
     // 鱼眼矫正
     private FisheyeCorrector fisheyeCorrector;
     private boolean fisheyePrimaryIsFloating = false; // 鱼眼矫正主输出是否为悬浮窗 Surface（无 TextureView 时）
+
+    // 领克全景模式：摄像头输出 2x2 拼接画面，经 FisheyeCorrector GL 管线裁切分发到各方向小窗
+    private volatile boolean panoramicMode = false;
+    private volatile String panoramicMainDirection = null; // 主画面显示的方向，null 表示完整拼接画面
+    private final java.util.Map<String, TextureView> panoramicViews = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<String, Surface> panoramicSurfaces = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<String, SurfaceTexture> panoramicSurfaceSources = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final String PANORAMIC_TAG_PREFIX = "panoramic_";
     
     // 亮度/降噪调节相关
     private CaptureRequest.Builder currentRequestBuilder;  // 当前的请求构建器（用于实时更新参数）
@@ -610,7 +618,12 @@ public class SingleCamera {
         int targetWidth;
         int targetHeight;
         
-        if (AppConfig.RESOLUTION_DEFAULT.equals(targetResolution)) {
+        if (AppConfig.RESOLUTION_DEFAULT.equals(targetResolution) && appConfig.isLynkCoCarModel()) {
+            // 领克：2560x1600（2x2 拼接画面，每个方向 1280x800）
+            targetWidth = 2560;
+            targetHeight = 1600;
+            AppLog.d(TAG, "Camera " + cameraId + " using LynkCo default target resolution: " + targetWidth + "x" + targetHeight);
+        } else if (AppConfig.RESOLUTION_DEFAULT.equals(targetResolution)) {
             // 默认：1280x800 (guardapp使用的分辨率)
             targetWidth = 1280;
             targetHeight = 800;
@@ -1327,8 +1340,10 @@ public class SingleCamera {
                     }
 
                     // 鱼眼矫正：通过 GL 中间层渲染到 TextureView
+                    // 领克全景模式即使未开启鱼眼矫正也走 GL 管线（用于裁切分发）
                     AppConfig fisheyeConfig = new AppConfig(context);
-                    if (fisheyeConfig.isFisheyeCorrectionEnabled()) {
+                    boolean fisheyeEnabled = fisheyeConfig.isFisheyeCorrectionEnabled();
+                    if (fisheyeEnabled || panoramicMode) {
                         try {
                             releaseFisheyeCorrector();
                             fisheyePrimaryIsFloating = false;
@@ -1337,8 +1352,14 @@ public class SingleCamera {
                             fisheyeCorrector = new FisheyeCorrector(cameraId, cameraPosition, pw, ph);
                             Surface tvSurface = new Surface(surfaceTexture);
                             previewSurface = fisheyeCorrector.initialize(tvSurface, backgroundHandler);
-                            fisheyeCorrector.loadParams(fisheyeConfig);
-                            AppLog.d(TAG, "Camera " + cameraId + " fisheye corrector active, using intermediate surface");
+                            if (fisheyeEnabled) {
+                                fisheyeCorrector.loadParams(fisheyeConfig);
+                            }
+                            if (panoramicMode) {
+                                applyPanoramicMainParams();
+                            }
+                            AppLog.d(TAG, "Camera " + cameraId + " fisheye corrector active, using intermediate surface"
+                                    + (panoramicMode ? " (panoramic)" : ""));
                         } catch (Exception e) {
                             AppLog.e(TAG, "Camera " + cameraId + " fisheye init failed, falling back", e);
                             releaseFisheyeCorrector();
@@ -1489,6 +1510,7 @@ public class SingleCamera {
                     } else {
                         fisheyeCorrector.removeOutputSurface("fullscreenPreview");
                     }
+                    syncPanoramicOutputs();
                 } else {
                     // 非鱼眼模式：使用 Surface Sharing
                     AppLog.d(TAG, "Camera " + cameraId + " Using Surface Sharing for preview streams");
@@ -2482,6 +2504,127 @@ public class SingleCamera {
             fisheyeCorrector = null;
         }
         fisheyePrimaryIsFloating = false;
+    }
+
+    // ==================== 领克全景模式 ====================
+
+    /**
+     * 启用/禁用领克全景模式。
+     * 启用后预览始终经过 FisheyeCorrector GL 管线，主画面与各方向小窗均从同一帧裁切，
+     * 录制 Surface 不受影响（仍录制完整拼接画面）。需在打开摄像头前设置，或之后调用 recreateSession()。
+     */
+    public void setPanoramicMode(boolean enabled) {
+        this.panoramicMode = enabled;
+        AppLog.d(TAG, "Camera " + cameraId + " panoramic mode: " + enabled);
+    }
+
+    public boolean isPanoramicMode() {
+        return panoramicMode;
+    }
+
+    /**
+     * 绑定/解绑某个方向的小窗 TextureView
+     * @param direction front/back/left/right
+     * @param view 小窗 TextureView，null 表示解绑（TextureView 销毁时调用）
+     */
+    public void setPanoramicView(String direction, TextureView view) {
+        if (view != null) {
+            panoramicViews.put(direction, view);
+        } else {
+            panoramicViews.remove(direction);
+        }
+        if (backgroundHandler != null) {
+            backgroundHandler.post(() -> {
+                if (view == null) {
+                    removePanoramicOutput(direction);
+                } else if (fisheyeCorrector != null && fisheyeCorrector.isInitialized()) {
+                    syncPanoramicOutputs();
+                } else if (panoramicMode && cameraDevice != null && textureView != null && previewSurface != null) {
+                    // GL 管线尚未建立（例如后台初始化时未启用全景模式），清除旧预览 Surface 并重建 session 以启用
+                    clearPreviewSurface();
+                    recreateSession();
+                }
+            });
+        } else if (view == null) {
+            removePanoramicOutput(direction);
+        }
+    }
+
+    /**
+     * 切换主画面显示内容
+     * @param direction front/back/left/right，null 表示完整拼接画面
+     */
+    public void setPanoramicMainDirection(String direction) {
+        this.panoramicMainDirection = direction;
+        applyPanoramicMainParams();
+    }
+
+    public String getPanoramicMainDirection() {
+        return panoramicMainDirection;
+    }
+
+    private void applyPanoramicMainParams() {
+        FisheyeCorrector corrector = fisheyeCorrector;
+        if (corrector == null || !panoramicMode) return;
+        String direction = panoramicMainDirection;
+        if (direction == null) {
+            // 完整拼接画面不做畸变矫正（矫正中心应在各方向画面中心，而非拼接图中心）
+            corrector.setMainOutputParams(null, -1, false);
+        } else {
+            AppConfig config = new AppConfig(context);
+            corrector.setMainOutputParams(AppConfig.getPanoramicCropRegion(direction),
+                    config.getPanoramicRotation(direction), config.isFisheyeCorrectionEnabled());
+        }
+    }
+
+    /**
+     * 将已就绪的小窗 TextureView 注册为 GL 管线的附加输出（需在 backgroundHandler 线程调用）
+     */
+    private void syncPanoramicOutputs() {
+        FisheyeCorrector corrector = fisheyeCorrector;
+        if (corrector == null || !corrector.isInitialized()) return;
+        if (!panoramicMode) {
+            for (String direction : new java.util.ArrayList<>(panoramicSurfaces.keySet())) {
+                removePanoramicOutput(direction);
+            }
+            return;
+        }
+        AppConfig config = new AppConfig(context);
+        boolean distort = config.isFisheyeCorrectionEnabled();
+        for (java.util.Map.Entry<String, TextureView> entry : panoramicViews.entrySet()) {
+            String direction = entry.getKey();
+            String tag = PANORAMIC_TAG_PREFIX + direction;
+            TextureView view = entry.getValue();
+            if (view == null || !view.isAvailable() || view.getSurfaceTexture() == null) {
+                removePanoramicOutput(direction);
+                continue;
+            }
+            SurfaceTexture source = view.getSurfaceTexture();
+            Surface surface = panoramicSurfaces.get(direction);
+            if (surface == null || !surface.isValid() || panoramicSurfaceSources.get(direction) != source) {
+                // 首次绑定或小窗 SurfaceTexture 已重建：重新创建输出 Surface
+                removePanoramicOutput(direction);
+                surface = new Surface(source);
+                panoramicSurfaces.put(direction, surface);
+                panoramicSurfaceSources.put(direction, source);
+            } else if (corrector.hasOutputSurface(tag)) {
+                continue;
+            }
+            corrector.addOutputSurface(tag, surface, AppConfig.getPanoramicCropRegion(direction),
+                    config.getPanoramicRotation(direction), distort);
+        }
+    }
+
+    private void removePanoramicOutput(String direction) {
+        FisheyeCorrector corrector = fisheyeCorrector;
+        if (corrector != null) {
+            corrector.removeOutputSurface(PANORAMIC_TAG_PREFIX + direction);
+        }
+        Surface surface = panoramicSurfaces.remove(direction);
+        panoramicSurfaceSources.remove(direction);
+        if (surface != null) {
+            try { surface.release(); } catch (Exception ignored) {}
+        }
     }
 
     /**

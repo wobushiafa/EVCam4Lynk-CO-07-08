@@ -378,7 +378,12 @@ public class AppConfig {
     public static final String CAR_MODEL_CUSTOM = "custom";  // 自定义车型
     public static final String CAR_MODEL_XINGHAN_7 = "xinghan_7";  // 26款星舰7
     public static final String CAR_MODEL_MULTIVIEW = "multiview";  // 多视角布局
-    
+    public static final String CAR_MODEL_LYNKCO_07 = "lynkco_07";  // 领克07/08（单路 2x2 环视拼接画面）
+    public static final String CAR_MODEL_LYNKCO_08_PLUS = "lynkco_08_plus";  // 领克08加包（0=AVM环视，6=座舱）
+
+    // 领克全景模式：各方向旋转角度
+    private static final String KEY_PANORAMIC_ROTATION_PREFIX = "panoramic_rotation_";
+
     private final SharedPreferences prefs;
     private final Context context;
 
@@ -807,10 +812,62 @@ public class AppConfig {
     
     /**
      * 获取车型
-     * @return 车型标识，默认为银河E5
+     * @return 车型标识，默认为领克07/08
      */
     public String getCarModel() {
-        return prefs.getString(KEY_CAR_MODEL, CAR_MODEL_GALAXY_E5);
+        return prefs.getString(KEY_CAR_MODEL, CAR_MODEL_LYNKCO_07);
+    }
+
+    /**
+     * 是否为领克车型（07/08 或 08加包）
+     */
+    public boolean isLynkCoCarModel() {
+        String carModel = getCarModel();
+        return CAR_MODEL_LYNKCO_07.equals(carModel) || CAR_MODEL_LYNKCO_08_PLUS.equals(carModel);
+    }
+
+    /**
+     * 是否为领克全景布局（单摄像头输出 2x2 拼接画面，主画面 + 四方向小窗）
+     */
+    public boolean isLynkCoPanoramicCarModel() {
+        return CAR_MODEL_LYNKCO_07.equals(getCarModel());
+    }
+
+    /**
+     * 领克全景拼接画面中各方向所在的区域
+     * @param direction front/back/left/right
+     * @return 裁切区域 [x, y, width, height]，归一化坐标（左上角为原点）
+     */
+    public static float[] getPanoramicCropRegion(String direction) {
+        switch (direction) {
+            case "front":
+                return new float[]{0.0f, 0.0f, 0.5f, 0.5f};  // 左上
+            case "back":
+                return new float[]{0.5f, 0.0f, 0.5f, 0.5f};  // 右上
+            case "left":
+                return new float[]{0.0f, 0.5f, 0.5f, 0.5f};  // 左下
+            case "right":
+                return new float[]{0.5f, 0.5f, 0.5f, 0.5f};  // 右下
+            default:
+                return new float[]{0.0f, 0.0f, 1.0f, 1.0f};
+        }
+    }
+
+    /**
+     * 设置领克全景模式下某方向画面的旋转角度
+     * @param direction front/back/left/right
+     * @param rotation 旋转角度（0/90/180/270）
+     */
+    public void setPanoramicRotation(String direction, int rotation) {
+        prefs.edit().putInt(KEY_PANORAMIC_ROTATION_PREFIX + direction, rotation).apply();
+        AppLog.d(TAG, "全景旋转设置: " + direction + " -> " + rotation + "°");
+    }
+
+    /**
+     * 获取领克全景模式下某方向画面的旋转角度，默认0
+     */
+    public int getPanoramicRotation(String direction) {
+        return prefs.getInt(KEY_PANORAMIC_ROTATION_PREFIX + direction, 0);
     }
     
     /**
@@ -852,6 +909,10 @@ public class AppConfig {
         String carModel = getCarModel();
         // 预设车型返回固定的摄像头数量
         switch (carModel) {
+            case CAR_MODEL_LYNKCO_07:
+                return 1;  // 领克07/08：1路环视拼接画面
+            case CAR_MODEL_LYNKCO_08_PLUS:
+                return 2;  // 领克08加包：0(AVM环视)+6(座舱)，设备最多同时打开2路
             case CAR_MODEL_PHONE:
                 return 2;  // 手机：2摄
             case CAR_MODEL_GALAXY_E5:
@@ -930,6 +991,18 @@ public class AppConfig {
     public String getCameraId(String position) {
         String key;
         String defaultValue;
+        String carModel = getCarModel();
+        if (CAR_MODEL_LYNKCO_07.equals(carModel)) {
+            // 领克07/08：仅摄像头0（2x2 环视拼接画面）
+            if (!"front".equals(position)) return "-1";
+            return prefs.getString(KEY_CAMERA_FRONT_ID, "0");
+        }
+        if (CAR_MODEL_LYNKCO_08_PLUS.equals(carModel)) {
+            // 领克08加包：1/2/4/5 无输出，使用 0(AVM环视)+6(座舱)
+            if ("front".equals(position)) return prefs.getString(KEY_CAMERA_FRONT_ID, "0");
+            if ("back".equals(position)) return prefs.getString(KEY_CAMERA_BACK_ID, "6");
+            return "-1";
+        }
         switch (position) {
             case "front":
                 key = KEY_CAMERA_FRONT_ID;

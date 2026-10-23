@@ -2,6 +2,7 @@ package com.kooo.evcam.config;
 
 import android.content.SharedPreferences;
 
+import com.kooo.evcam.AppConfig;
 import com.kooo.evcam.AppLog;
 
 import java.util.Locale;
@@ -57,8 +58,8 @@ public class RecordingConfig {
     public static final int WATERMARK_STYLE_MINIMAL = 4;
 
     // 车型常量
-    private static final String CAR_MODEL_LYNK_08_07 = "lynk_08_07";
-    private static final String CAR_MODEL_LYNK_08_07_PLUS = "lynk_08_07_plus";
+    private static final String CAR_MODEL_LYNK_08_07 = AppConfig.CAR_MODEL_LYNKCO_07;
+    private static final String CAR_MODEL_LYNK_08_07_PLUS = AppConfig.CAR_MODEL_LYNKCO_08_PLUS;
     private static final String CAR_MODEL_L7 = "galaxy_l7";
     private static final String CAR_MODEL_L7_MULTI = "galaxy_l7_multi";
 

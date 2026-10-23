@@ -32,6 +32,7 @@ import java.util.Map;
  * 2. 使用 OES 纹理读取摄像头帧
  * 3. 通过鱼眼矫正片段着色器渲染到主 TextureView 的 Surface
  * 4. 同一帧同时渲染到所有附加输出（补盲悬浮窗、副屏等），共享同一个 GL 管线
+ * 5. 每个输出可单独指定裁切区域/旋转/是否矫正（领克全景：单路 2x2 拼接画面分发到多个视图）
  *
  * 矫正模型：Brown-Conrady 径向畸变
  *   r_corrected = r * (1.0 + k1 * r² + k2 * r⁴)
@@ -70,6 +71,7 @@ public class FisheyeCorrector {
             "uniform float uZoom;\n" +         // 矫正后缩放（用于裁切黑边）
             "uniform vec2 uCenter;\n" +        // 畸变中心偏移 (0.5, 0.5) 为画面正中
             "uniform float uRotation;\n" +      // 旋转角度（度数）
+            "uniform vec4 uCrop;\n" +           // 源画面裁切区域 (x, y, w, h)，纹理空间（y 向上）
             "const float PI = 3.14159265;\n" +
             "void main() {\n" +
             "    // 应用旋转\n" +
@@ -89,7 +91,8 @@ public class FisheyeCorrector {
             "        corrected.y < 0.0 || corrected.y > 1.0) {\n" +
             "        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);\n" +
             "    } else {\n" +
-            "        vec2 texCoord = (uTexMatrix * vec4(corrected, 0.0, 1.0)).xy;\n" +
+            "        vec2 src = uCrop.xy + corrected * uCrop.zw;\n" +
+            "        vec2 texCoord = (uTexMatrix * vec4(src, 0.0, 1.0)).xy;\n" +
             "        gl_FragColor = texture2D(sTexture, texCoord);\n" +
             "    }\n" +
             "}\n";
@@ -139,6 +142,7 @@ public class FisheyeCorrector {
     private int zoomHandle;
     private int centerHandle;
     private int rotationHandle;
+    private int cropHandle;
 
     // 变换矩阵
     private final float[] mvpMatrix = new float[16];
@@ -152,6 +156,33 @@ public class FisheyeCorrector {
     // key: "mainFloating" / "secondaryDisplay" 等标识
     private final LinkedHashMap<String, EGLSurface> extraEglSurfaces = new LinkedHashMap<>();
     private final LinkedHashMap<String, Surface> extraRawSurfaces = new LinkedHashMap<>();
+    private final LinkedHashMap<String, OutputParams> extraOutputParams = new LinkedHashMap<>();
+
+    /** 完整画面（不裁切） */
+    public static final float[] FULL_FRAME = {0.0f, 0.0f, 1.0f, 1.0f};
+
+    /**
+     * 单个输出的渲染参数（不可变，可跨线程整体替换）
+     * crop: 源画面裁切区域 [x, y, w, h]，归一化图像坐标（左上角为原点）
+     * rotation: 旋转角度，-1 表示沿用全局 rotation
+     * distort: 是否应用畸变矫正
+     */
+    private static final class OutputParams {
+        final float[] texCrop;
+        final int rotation;
+        final boolean distort;
+
+        OutputParams(float[] crop, int rotation, boolean distort) {
+            float[] c = (crop != null && crop.length == 4) ? crop : FULL_FRAME;
+            // 图像坐标（y 向下）转换为纹理坐标（y 向上）
+            this.texCrop = new float[]{c[0], 1.0f - c[1] - c[3], c[2], c[3]};
+            this.rotation = rotation;
+            this.distort = distort;
+        }
+    }
+
+    private static final OutputParams DEFAULT_OUTPUT_PARAMS = new OutputParams(FULL_FRAME, -1, true);
+    private volatile OutputParams mainOutputParams = DEFAULT_OUTPUT_PARAMS;
 
     // 矫正参数（可实时更新）
     private volatile float k1 = 0.0f;
@@ -247,6 +278,17 @@ public class FisheyeCorrector {
     }
 
     /**
+     * 设置主输出（TextureView）的裁切/旋转/矫正参数，下一帧生效
+     *
+     * @param crop     源画面裁切区域 [x, y, w, h]（归一化，左上角为原点），null 表示完整画面
+     * @param rotation 旋转角度，-1 表示沿用全局 rotation
+     * @param distort  是否应用畸变矫正
+     */
+    public void setMainOutputParams(float[] crop, int rotation, boolean distort) {
+        this.mainOutputParams = new OutputParams(crop, rotation, distort);
+    }
+
+    /**
      * 获取中间 Surface（供 Camera2 作为预览输出目标）
      */
     public Surface getIntermediateSurface() {
@@ -275,6 +317,18 @@ public class FisheyeCorrector {
      * @param surface 附加输出的 Surface
      */
     public void addOutputSurface(String tag, Surface surface) {
+        addOutputSurface(tag, surface, null, -1, true);
+    }
+
+    /**
+     * 添加一个带独立裁切/旋转/矫正参数的附加输出 Surface。
+     * 必须在 GL 线程（Handler）上调用。
+     *
+     * @param crop     源画面裁切区域 [x, y, w, h]（归一化，左上角为原点），null 表示完整画面
+     * @param rotation 旋转角度，-1 表示沿用全局 rotation
+     * @param distort  是否应用畸变矫正
+     */
+    public void addOutputSurface(String tag, Surface surface, float[] crop, int rotation, boolean distort) {
         if (!isInitialized || isReleased) return;
         if (surface == null || !surface.isValid()) return;
 
@@ -291,6 +345,7 @@ public class FisheyeCorrector {
             }
             extraEglSurfaces.put(tag, eglSurf);
             extraRawSurfaces.put(tag, surface);
+            extraOutputParams.put(tag, new OutputParams(crop, rotation, distort));
             AppLog.d(TAG, "Camera " + cameraId + " added extra output surface: " + tag);
         } catch (Exception e) {
             AppLog.e(TAG, "Camera " + cameraId + " error adding extra output " + tag, e);
@@ -303,6 +358,7 @@ public class FisheyeCorrector {
     public void removeOutputSurface(String tag) {
         EGLSurface eglSurf = extraEglSurfaces.remove(tag);
         extraRawSurfaces.remove(tag);
+        extraOutputParams.remove(tag);
         if (eglSurf != null && eglSurf != EGL14.EGL_NO_SURFACE) {
             try {
                 // 确保当前 context 不在被移除的 surface 上
@@ -344,18 +400,14 @@ public class FisheyeCorrector {
             GLES20.glUniformMatrix4fv(mvpMatrixHandle, 1, false, mvpMatrix, 0);
             GLES20.glUniformMatrix4fv(texMatrixHandle, 1, false, texMatrix, 0);
             GLES20.glUniform1i(textureHandle, 0);
-            GLES20.glUniform1f(k1Handle, k1);
-            GLES20.glUniform1f(k2Handle, k2);
-            GLES20.glUniform1f(zoomHandle, zoom);
             GLES20.glUniform2f(centerHandle, centerX, centerY);
-            GLES20.glUniform1f(rotationHandle, rotation);
             GLES20.glEnableVertexAttribArray(positionHandle);
             GLES20.glVertexAttribPointer(positionHandle, 2, GLES20.GL_FLOAT, false, 0, vertexBuffer);
             GLES20.glEnableVertexAttribArray(texCoordHandle);
             GLES20.glVertexAttribPointer(texCoordHandle, 2, GLES20.GL_FLOAT, false, 0, texCoordBuffer);
 
             // ── 1. 渲染到主输出（TextureView）──
-            renderToSurface(eglSurface);
+            renderToSurface(eglSurface, mainOutputParams);
 
             // ── 2. 渲染到所有附加输出（补盲悬浮窗、副屏等）──
             if (!extraEglSurfaces.isEmpty()) {
@@ -367,11 +419,13 @@ public class FisheyeCorrector {
                         // Surface 已失效，自动清理
                         try { EGL14.eglDestroySurface(eglDisplay, entry.getValue()); } catch (Exception ignored) {}
                         extraRawSurfaces.remove(entry.getKey());
+                        extraOutputParams.remove(entry.getKey());
                         it.remove();
                         AppLog.d(TAG, "Camera " + cameraId + " auto-removed invalid extra surface: " + entry.getKey());
                         continue;
                     }
-                    renderToSurface(entry.getValue());
+                    OutputParams params = extraOutputParams.get(entry.getKey());
+                    renderToSurface(entry.getValue(), params != null ? params : DEFAULT_OUTPUT_PARAMS);
                 }
                 // 恢复主 EGL Surface 为 current
                 EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext);
@@ -388,8 +442,15 @@ public class FisheyeCorrector {
     /**
      * 渲染矫正帧到指定 EGL Surface（主输出或附加输出共用）
      */
-    private void renderToSurface(EGLSurface targetSurface) {
+    private void renderToSurface(EGLSurface targetSurface, OutputParams params) {
         EGL14.eglMakeCurrent(eglDisplay, targetSurface, targetSurface, eglContext);
+
+        // 每个输出独立的裁切/旋转/矫正参数（不矫正时 k=0、zoom=1 即为恒等映射）
+        GLES20.glUniform4fv(cropHandle, 1, params.texCrop, 0);
+        GLES20.glUniform1f(rotationHandle, params.rotation >= 0 ? params.rotation : rotation);
+        GLES20.glUniform1f(k1Handle, params.distort ? k1 : 0.0f);
+        GLES20.glUniform1f(k2Handle, params.distort ? k2 : 0.0f);
+        GLES20.glUniform1f(zoomHandle, params.distort ? zoom : 1.0f);
 
         int[] vw = new int[1], vh = new int[1];
         EGL14.eglQuerySurface(eglDisplay, targetSurface, EGL14.EGL_WIDTH, vw, 0);
@@ -468,6 +529,7 @@ public class FisheyeCorrector {
         zoomHandle = GLES20.glGetUniformLocation(program, "uZoom");
         centerHandle = GLES20.glGetUniformLocation(program, "uCenter");
         rotationHandle = GLES20.glGetUniformLocation(program, "uRotation");
+        cropHandle = GLES20.glGetUniformLocation(program, "uCrop");
 
         // OES 纹理
         int[] textures = new int[1];
@@ -500,6 +562,7 @@ public class FisheyeCorrector {
         }
         extraEglSurfaces.clear();
         extraRawSurfaces.clear();
+        extraOutputParams.clear();
 
         if (intermediateSurfaceTexture != null) {
             intermediateSurfaceTexture.setOnFrameAvailableListener(null);
